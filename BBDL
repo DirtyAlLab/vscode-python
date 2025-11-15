@@ -1,0 +1,570 @@
+import React, { useState, useEffect } from "react";
+
+// Simple ID helper
+const uid = () => Math.random().toString(36).slice(2);
+
+const STORAGE_KEY = "dart-league-data-v1";
+
+function loadInitialData() {
+  if (typeof window === "undefined") return { teams: [], players: [], matches: [] };
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY);
+    if (!raw) return { teams: [], players: [], matches: [] };
+    return JSON.parse(raw);
+  } catch (e) {
+    console.error("Failed to load data", e);
+    return { teams: [], players: [], matches: [] };
+  }
+}
+
+function saveData(data) {
+  if (typeof window === "undefined") return;
+  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(data));
+}
+
+export default function DartLeagueApp() {
+  const [data, setData] = useState(() => loadInitialData());
+  const [activeTab, setActiveTab] = useState("admin");
+
+  // Forms
+  const [teamForm, setTeamForm] = useState({ name: "", division: "A" });
+  const [playerForm, setPlayerForm] = useState({ name: "", nickname: "", teamId: "" });
+  const [matchForm, setMatchForm] = useState({
+    date: "",
+    homeTeamId: "",
+    awayTeamId: "",
+    homeScore: "",
+    awayScore: "",
+    notes: "",
+  });
+
+  useEffect(() => {
+    saveData(data);
+  }, [data]);
+
+  const addTeam = (e) => {
+    e.preventDefault();
+    if (!teamForm.name.trim()) return;
+    const newTeam = {
+      id: uid(),
+      name: teamForm.name.trim(),
+      division: teamForm.division || "A",
+    };
+    setData((prev) => ({ ...prev, teams: [...prev.teams, newTeam] }));
+    setTeamForm({ name: "", division: teamForm.division });
+  };
+
+  const addPlayer = (e) => {
+    e.preventDefault();
+    if (!playerForm.name.trim() || !playerForm.teamId) return;
+    const newPlayer = {
+      id: uid(),
+      name: playerForm.name.trim(),
+      nickname: playerForm.nickname.trim(),
+      teamId: playerForm.teamId,
+    };
+    setData((prev) => ({ ...prev, players: [...prev.players, newPlayer] }));
+    setPlayerForm({ name: "", nickname: "", teamId: playerForm.teamId });
+  };
+
+  const addMatch = (e) => {
+    e.preventDefault();
+    const { date, homeTeamId, awayTeamId, homeScore, awayScore } = matchForm;
+    if (!date || !homeTeamId || !awayTeamId || homeTeamId === awayTeamId) return;
+    if (homeScore === "" || awayScore === "") return;
+
+    const hs = Number(homeScore);
+    const as = Number(awayScore);
+    if (Number.isNaN(hs) || Number.isNaN(as)) return;
+
+    const newMatch = {
+      id: uid(),
+      date,
+      homeTeamId,
+      awayTeamId,
+      homeScore: hs,
+      awayScore: as,
+      notes: matchForm.notes.trim(),
+    };
+    setData((prev) => ({ ...prev, matches: [...prev.matches, newMatch] }));
+    setMatchForm({ date: "", homeTeamId: "", awayTeamId: "", homeScore: "", awayScore: "", notes: "" });
+  };
+
+  const getTeamById = (id) => data.teams.find((t) => t.id === id) || null;
+
+  const computeStandings = () => {
+    const standingsMap = new Map();
+
+    data.teams.forEach((team) => {
+      standingsMap.set(team.id, {
+        team,
+        played: 0,
+        wins: 0,
+        losses: 0,
+        draws: 0,
+        legsFor: 0,
+        legsAgainst: 0,
+      });
+    });
+
+    data.matches.forEach((m) => {
+      const home = standingsMap.get(m.homeTeamId);
+      const away = standingsMap.get(m.awayTeamId);
+      if (!home || !away) return;
+
+      home.played += 1;
+      away.played += 1;
+      home.legsFor += m.homeScore;
+      home.legsAgainst += m.awayScore;
+      away.legsFor += m.awayScore;
+      away.legsAgainst += m.homeScore;
+
+      if (m.homeScore > m.awayScore) {
+        home.wins += 1;
+        away.losses += 1;
+      } else if (m.homeScore < m.awayScore) {
+        away.wins += 1;
+        home.losses += 1;
+      } else {
+        home.draws += 1;
+        away.draws += 1;
+      }
+    });
+
+    const standingsArray = Array.from(standingsMap.values());
+
+    standingsArray.forEach((row) => {
+      const totalGames = row.played;
+      const winPoints = row.wins * 2 + row.draws; // win=2 pts, draw=1
+      row.points = winPoints;
+      row.diff = row.legsFor - row.legsAgainst;
+      row.winPct = totalGames ? (row.wins / totalGames) * 100 : 0;
+    });
+
+    standingsArray.sort((a, b) => {
+      if (b.points !== a.points) return b.points - a.points;
+      if (b.diff !== a.diff) return b.diff - a.diff;
+      return b.legsFor - a.legsFor;
+    });
+
+    return standingsArray;
+  };
+
+  const standings = computeStandings();
+
+  return (
+    <div className="min-h-screen bg-slate-950 text-slate-50 flex flex-col">
+      <header className="border-b border-slate-800 bg-slate-900/70 backdrop-blur sticky top-0 z-10">
+        <div className="max-w-6xl mx-auto px-4 py-4 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-bold tracking-tight">Dart League Manager</h1>
+            <p className="text-xs text-slate-400">
+              Enter teams, players, and match results – instantly publish a public standings page.
+            </p>
+          </div>
+          <div className="flex items-center gap-2 text-xs text-slate-400">
+            <span className="hidden sm:inline">View mode:</span>
+            <button
+              onClick={() => setActiveTab("admin")}
+              className={`px-3 py-1 rounded-full border text-xs font-medium transition ${
+                activeTab === "admin"
+                  ? "bg-emerald-500 text-slate-950 border-emerald-400"
+                  : "border-slate-600 hover:border-slate-400"
+              }`}
+            >
+              Admin
+            </button>
+            <button
+              onClick={() => setActiveTab("public")}
+              className={`px-3 py-1 rounded-full border text-xs font-medium transition ${
+                activeTab === "public"
+                  ? "bg-sky-500 text-slate-950 border-sky-400"
+                  : "border-slate-600 hover:border-slate-400"
+              }`}
+            >
+              Public Standings
+            </button>
+          </div>
+        </div>
+      </header>
+
+      <main className="flex-1 max-w-6xl mx-auto w-full px-4 py-6 space-y-6">
+        {activeTab === "admin" ? (
+          <div className="grid md:grid-cols-2 gap-6">
+            {/* Teams */}
+            <section className="bg-slate-900/60 border border-slate-800 rounded-2xl p-4 shadow-xl shadow-black/40">
+              <h2 className="text-lg font-semibold mb-3 flex items-center justify-between">
+                Teams
+                <span className="text-xs text-slate-400">Total: {data.teams.length}</span>
+              </h2>
+              <form onSubmit={addTeam} className="space-y-3 mb-4">
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">Team name</label>
+                  <input
+                    className="w-full rounded-md bg-slate-950 border border-slate-700 px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-emerald-400"
+                    value={teamForm.name}
+                    onChange={(e) => setTeamForm((f) => ({ ...f, name: e.target.value }))}
+                    placeholder="Bullseye Bandits"
+                  />
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="flex-1">
+                    <label className="block text-xs text-slate-400 mb-1">Division</label>
+                    <select
+                      className="w-full rounded-md bg-slate-950 border border-slate-700 px-3 py-1.5 text-sm"
+                      value={teamForm.division}
+                      onChange={(e) => setTeamForm((f) => ({ ...f, division: e.target.value }))}
+                    >
+                      <option value="Premier">Premier</option>
+                      <option value="A">A</option>
+                      <option value="B">B</option>
+                      <option value="C">C</option>
+                    </select>
+                  </div>
+                  <button
+                    type="submit"
+                    className="mt-5 inline-flex items-center justify-center rounded-md border border-emerald-400 bg-emerald-500/90 px-3 py-1.5 text-xs font-semibold text-slate-950 shadow hover:bg-emerald-400 transition"
+                  >
+                    + Add Team
+                  </button>
+                </div>
+              </form>
+              <div className="max-h-60 overflow-y-auto text-xs">
+                {data.teams.length === 0 ? (
+                  <p className="text-slate-500">No teams yet. Add your first team above.</p>
+                ) : (
+                  <table className="w-full border-collapse text-left">
+                    <thead className="sticky top-0 bg-slate-900">
+                      <tr className="text-slate-400 border-b border-slate-800">
+                        <th className="py-1 pr-2 font-medium">Team</th>
+                        <th className="py-1 px-2 font-medium">Division</th>
+                        <th className="py-1 pl-2 font-medium text-right">Players</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.teams.map((team) => {
+                        const count = data.players.filter((p) => p.teamId === team.id).length;
+                        return (
+                          <tr key={team.id} className="border-b border-slate-800/60">
+                            <td className="py-1 pr-2">{team.name}</td>
+                            <td className="py-1 px-2 text-slate-400">{team.division}</td>
+                            <td className="py-1 pl-2 text-right text-slate-400">{count}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </section>
+
+            {/* Players */}
+            <section className="bg-slate-900/60 border border-slate-800 rounded-2xl p-4 shadow-xl shadow-black/40">
+              <h2 className="text-lg font-semibold mb-3 flex items-center justify-between">
+                Players
+                <span className="text-xs text-slate-400">Total: {data.players.length}</span>
+              </h2>
+              <form onSubmit={addPlayer} className="space-y-3 mb-4">
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">Player name</label>
+                  <input
+                    className="w-full rounded-md bg-slate-950 border border-slate-700 px-3 py-1.5 text-sm focus:outline-none focus:ring-1 focus:ring-sky-400"
+                    value={playerForm.name}
+                    onChange={(e) => setPlayerForm((f) => ({ ...f, name: e.target.value }))}
+                    placeholder="Jane Doe"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs text-slate-400 mb-1">Nickname (optional)</label>
+                  <input
+                    className="w-full rounded-md bg-slate-950 border border-slate-700 px-3 py-1.5 text-sm"
+                    value={playerForm.nickname}
+                    onChange={(e) => setPlayerForm((f) => ({ ...f, nickname: e.target.value }))}
+                    placeholder="The Sharpshooter"
+                  />
+                </div>
+                <div className="flex items-center gap-3">
+                  <div className="flex-1">
+                    <label className="block text-xs text-slate-400 mb-1">Team</label>
+                    <select
+                      className="w-full rounded-md bg-slate-950 border border-slate-700 px-3 py-1.5 text-sm"
+                      value={playerForm.teamId}
+                      onChange={(e) => setPlayerForm((f) => ({ ...f, teamId: e.target.value }))}
+                    >
+                      <option value="">Select a team…</option>
+                      {data.teams.map((team) => (
+                        <option key={team.id} value={team.id}>
+                          {team.name} ({team.division})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <button
+                    type="submit"
+                    className="mt-5 inline-flex items-center justify-center rounded-md border border-sky-400 bg-sky-500/90 px-3 py-1.5 text-xs font-semibold text-slate-950 shadow hover:bg-sky-400 transition"
+                  >
+                    + Add Player
+                  </button>
+                </div>
+              </form>
+              <div className="max-h-60 overflow-y-auto text-xs">
+                {data.players.length === 0 ? (
+                  <p className="text-slate-500">No players yet. Add players and assign them to teams.</p>
+                ) : (
+                  <table className="w-full border-collapse text-left">
+                    <thead className="sticky top-0 bg-slate-900">
+                      <tr className="text-slate-400 border-b border-slate-800">
+                        <th className="py-1 pr-2 font-medium">Player</th>
+                        <th className="py-1 px-2 font-medium">Nickname</th>
+                        <th className="py-1 pl-2 font-medium">Team</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.players.map((p) => {
+                        const team = getTeamById(p.teamId);
+                        return (
+                          <tr key={p.id} className="border-b border-slate-800/60">
+                            <td className="py-1 pr-2">{p.name}</td>
+                            <td className="py-1 px-2 text-slate-400">{p.nickname || "–"}</td>
+                            <td className="py-1 pl-2 text-slate-400">{team ? team.name : "–"}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </section>
+
+            {/* Matches & Stats */}
+            <section className="bg-slate-900/60 border border-slate-800 rounded-2xl p-4 shadow-xl shadow-black/40 md:col-span-2">
+              <h2 className="text-lg font-semibold mb-3 flex items-center justify-between">
+                Match Results
+                <span className="text-xs text-slate-400">Total: {data.matches.length}</span>
+              </h2>
+              <form onSubmit={addMatch} className="grid md:grid-cols-5 gap-3 mb-4 text-xs md:text-sm">
+                <div>
+                  <label className="block text-[0.7rem] text-slate-400 mb-1">Date</label>
+                  <input
+                    type="date"
+                    className="w-full rounded-md bg-slate-950 border border-slate-700 px-2 py-1 focus:outline-none focus:ring-1 focus:ring-purple-400"
+                    value={matchForm.date}
+                    onChange={(e) => setMatchForm((f) => ({ ...f, date: e.target.value }))}
+                  />
+                </div>
+                <div>
+                  <label className="block text-[0.7rem] text-slate-400 mb-1">Home Team</label>
+                  <select
+                    className="w-full rounded-md bg-slate-950 border border-slate-700 px-2 py-1"
+                    value={matchForm.homeTeamId}
+                    onChange={(e) => setMatchForm((f) => ({ ...f, homeTeamId: e.target.value }))}
+                  >
+                    <option value="">Select…</option>
+                    {data.teams.map((team) => (
+                      <option key={team.id} value={team.id}>
+                        {team.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-[0.7rem] text-slate-400 mb-1">Away Team</label>
+                  <select
+                    className="w-full rounded-md bg-slate-950 border border-slate-700 px-2 py-1"
+                    value={matchForm.awayTeamId}
+                    onChange={(e) => setMatchForm((f) => ({ ...f, awayTeamId: e.target.value }))}
+                  >
+                    <option value="">Select…</option>
+                    {data.teams.map((team) => (
+                      <option key={team.id} value={team.id}>
+                        {team.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="flex items-end gap-2">
+                  <div className="flex-1">
+                    <label className="block text-[0.7rem] text-slate-400 mb-1">Home Legs</label>
+                    <input
+                      type="number"
+                      min="0"
+                      className="w-full rounded-md bg-slate-950 border border-slate-700 px-2 py-1"
+                      value={matchForm.homeScore}
+                      onChange={(e) => setMatchForm((f) => ({ ...f, homeScore: e.target.value }))}
+                    />
+                  </div>
+                  <div className="flex-1">
+                    <label className="block text-[0.7rem] text-slate-400 mb-1">Away Legs</label>
+                    <input
+                      type="number"
+                      min="0"
+                      className="w-full rounded-md bg-slate-950 border border-slate-700 px-2 py-1"
+                      value={matchForm.awayScore}
+                      onChange={(e) => setMatchForm((f) => ({ ...f, awayScore: e.target.value }))}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-[0.7rem] text-slate-400 mb-1">Notes (optional)</label>
+                  <input
+                    className="w-full rounded-md bg-slate-950 border border-slate-700 px-2 py-1 mb-2"
+                    value={matchForm.notes}
+                    onChange={(e) => setMatchForm((f) => ({ ...f, notes: e.target.value }))}
+                    placeholder="Playoff match, board 2"
+                  />
+                  <button
+                    type="submit"
+                    className="w-full inline-flex items-center justify-center rounded-md border border-purple-400 bg-purple-500/90 px-3 py-1.5 text-xs font-semibold text-slate-950 shadow hover:bg-purple-400 transition"
+                  >
+                    + Add Result
+                  </button>
+                </div>
+              </form>
+
+              <div className="max-h-64 overflow-y-auto text-xs">
+                {data.matches.length === 0 ? (
+                  <p className="text-slate-500">No results yet. Add match scores to build your standings.</p>
+                ) : (
+                  <table className="w-full border-collapse text-left">
+                    <thead className="sticky top-0 bg-slate-900">
+                      <tr className="text-slate-400 border-b border-slate-800">
+                        <th className="py-1 pr-2 font-medium">Date</th>
+                        <th className="py-1 px-2 font-medium">Home</th>
+                        <th className="py-1 px-2 font-medium">Score</th>
+                        <th className="py-1 px-2 font-medium">Away</th>
+                        <th className="py-1 pl-2 font-medium">Notes</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {data.matches
+                        .slice()
+                        .sort((a, b) => (a.date < b.date ? 1 : -1))
+                        .map((m) => {
+                          const home = getTeamById(m.homeTeamId);
+                          const away = getTeamById(m.awayTeamId);
+                          return (
+                            <tr key={m.id} className="border-b border-slate-800/60">
+                              <td className="py-1 pr-2 text-slate-400">
+                                {m.date ? new Date(m.date).toLocaleDateString() : ""}
+                              </td>
+                              <td className="py-1 px-2">{home ? home.name : "?"}</td>
+                              <td className="py-1 px-2 text-slate-300">
+                                {m.homeScore} - {m.awayScore}
+                              </td>
+                              <td className="py-1 px-2">{away ? away.name : "?"}</td>
+                              <td className="py-1 pl-2 text-slate-400 truncate max-w-[12rem]">
+                                {m.notes || ""}
+                              </td>
+                            </tr>
+                          );
+                        })}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            </section>
+          </div>
+        ) : (
+          // Public view
+          <section className="bg-slate-900/60 border border-slate-800 rounded-2xl p-4 shadow-xl shadow-black/40">
+            <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+              <div>
+                <h2 className="text-xl font-semibold">League Standings</h2>
+                <p className="text-xs text-slate-400">
+                  Share this page as your public league table. Data updates automatically from the Admin view.
+                </p>
+              </div>
+              <div className="text-[0.65rem] text-slate-400 bg-slate-950/70 border border-slate-700 px-3 py-1.5 rounded-full">
+                Last updated: {new Date().toLocaleString()}
+              </div>
+            </div>
+
+            {standings.length === 0 ? (
+              <p className="text-slate-500 text-sm">No standings yet. Add teams and match results in the Admin view.</p>
+            ) : (
+              <div className="overflow-x-auto text-xs md:text-sm">
+                <table className="w-full border-collapse text-left">
+                  <thead>
+                    <tr className="border-b border-slate-800 text-slate-400 text-[0.7rem] md:text-xs uppercase tracking-wide">
+                      <th className="py-2 pr-3 font-medium">Pos</th>
+                      <th className="py-2 pr-3 font-medium">Team</th>
+                      <th className="py-2 px-2 font-medium text-center">Div</th>
+                      <th className="py-2 px-2 font-medium text-center">P</th>
+                      <th className="py-2 px-2 font-medium text-center">W</th>
+                      <th className="py-2 px-2 font-medium text-center">D</th>
+                      <th className="py-2 px-2 font-medium text-center">L</th>
+                      <th className="py-2 px-2 font-medium text-center">LF</th>
+                      <th className="py-2 px-2 font-medium text-center">LA</th>
+                      <th className="py-2 px-2 font-medium text-center">Diff</th>
+                      <th className="py-2 pl-2 font-medium text-center">Pts</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {standings.map((row, idx) => (
+                      <tr
+                        key={row.team.id}
+                        className={`border-b border-slate-800/70 ${
+                          idx === 0 ? "bg-emerald-500/5" : idx === 1 ? "bg-sky-500/5" : idx === 2 ? "bg-purple-500/5" : ""
+                        }`}
+                      >
+                        <td className="py-1.5 pr-3 text-slate-400">{idx + 1}</td>
+                        <td className="py-1.5 pr-3 font-medium">{row.team.name}</td>
+                        <td className="py-1.5 px-2 text-center text-slate-400">{row.team.division}</td>
+                        <td className="py-1.5 px-2 text-center">{row.played}</td>
+                        <td className="py-1.5 px-2 text-center">{row.wins}</td>
+                        <td className="py-1.5 px-2 text-center">{row.draws}</td>
+                        <td className="py-1.5 px-2 text-center">{row.losses}</td>
+                        <td className="py-1.5 px-2 text-center">{row.legsFor}</td>
+                        <td className="py-1.5 px-2 text-center">{row.legsAgainst}</td>
+                        <td className="py-1.5 px-2 text-center">{row.diff}</td>
+                        <td className="py-1.5 pl-2 text-center font-semibold text-emerald-400">{row.points}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+
+            {data.players.length > 0 && (
+              <div className="mt-8">
+                <h3 className="text-sm font-semibold mb-2">Registered Players</h3>
+                <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-2 text-xs">
+                  {data.players.map((p) => {
+                    const team = getTeamById(p.teamId);
+                    return (
+                      <div
+                        key={p.id}
+                        className="rounded-lg border border-slate-800 bg-slate-950/70 px-3 py-2 flex items-center justify-between"
+                      >
+                        <div>
+                          <div className="font-medium flex items-center gap-2">
+                            {p.name}
+                            {p.nickname && (
+                              <span className="text-[0.6rem] uppercase tracking-wide text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded-full">
+                                {p.nickname}
+                              </span>
+                            )}
+                          </div>
+                          <div className="text-[0.65rem] text-slate-400">{team ? team.name : "Free agent"}</div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+          </section>
+        )}
+      </main>
+
+      <footer className="border-t border-slate-800 bg-slate-950/80 text-[0.65rem] text-slate-500">
+        <div className="max-w-6xl mx-auto px-4 py-3 flex flex-wrap gap-2 justify-between items-center">
+          <span>
+            Data is stored locally in your browser. To move this online, deploy this app to any static host (Netlify, Vercel, etc.).
+          </span>
+          <span>Made for dart league organizers 🎯</span>
+        </div>
+      </footer>
+    </div>
+  );
+}
